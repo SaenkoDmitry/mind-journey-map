@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Mind Journey">
-  <rect width="512" height="512" rx="112" fill="#16202d"/>
+  <rect width="512" height="512" fill="#16202d"/>
   <path d="M142 126h165c41 0 74 33 74 74v154H216c-41 0-74-33-74-74V126Z" fill="#e6a23c"/>
   <path d="M186 178h119M186 226h149M186 274h98" stroke="#16202d" stroke-width="28" stroke-linecap="round"/>
   <circle cx="369" cy="146" r="20" fill="#f7f4ee"/>
