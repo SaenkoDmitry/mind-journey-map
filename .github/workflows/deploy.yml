@@ -24,7 +24,7 @@ jobs:
 
       - name: Build Go binary
         run: |
-          CGO_ENABLED=0 go build -o mind ./cmd/main.go
+          CGO_ENABLED=0 go build -o mind-journey-map ./cmd/server/main.go
 
       # -----------------
       # DEPLOY TO VPS
@@ -36,8 +36,8 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASSWORD }}
-          source: "mind"
-          target: "/opt/mind/"
+          source: "mind-journey-map"
+          target: "/opt/mind-journey-map/"
 
       - name: Deploy systemd service
         uses: appleboy/ssh-action@v0.1.7
@@ -46,8 +46,8 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASSWORD }}
           script: |
-            sudo systemctl stop mind
+            sudo systemctl stop mind-journey-map
             echo "KNOWLEDGE_BASE_DIR=${{ secrets.KNOWLEDGE_BASE_DIR }}" > .env
-            cd /opt/mind
-            sudo systemctl start mind
-            sudo systemctl status mind --no-pager
+            cd /opt/mind-journey-map
+            sudo systemctl start mind-journey-map
+            sudo systemctl status mind-journey-map --no-pager
