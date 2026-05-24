@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { Component, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -41,6 +41,7 @@ type Card = {
 
 type ReviewState = Record<string, { ease: number; due: string; count: number; lastReviewed: string }>;
 type Mode = "book" | "review";
+type Route = { mode: Mode; topicSlug?: string; sectionSlug?: string };
 
 const reviewLabels = [
   { label: "Снова", hint: "сегодня", ease: 0, days: 0 },
@@ -58,6 +59,18 @@ function App() {
   const [reviewState, setReviewState] = usePersistentState<ReviewState>("mind-journey-review", {});
   const [activeCardId, setActiveCardId] = useState("");
   const [answerVisible, setAnswerVisible] = useState(false);
+  const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash));
+  const [readSectionSlug, setReadSectionSlug] = useState(route.sectionSlug);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const nextRoute = parseRoute(window.location.hash);
+      setRoute(nextRoute);
+      setReadSectionSlug(nextRoute.sectionSlug);
+    };
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
 
   useEffect(() => {
     fetch("/api/library")
@@ -67,7 +80,9 @@ function App() {
       })
       .then((data) => {
         setLibrary(data);
-        setSelectedTopicId((current) => current || data.topics[0]?.id || "");
+        const routedTopic = topicBySlug(data.topics, route.topicSlug);
+        setMode(route.mode);
+        setSelectedTopicId((current) => routedTopic?.id || current || data.topics[0]?.id || "");
         localStorage.setItem("mind-journey-library", JSON.stringify(data));
       })
       .catch(() => {
@@ -75,7 +90,9 @@ function App() {
         if (cached) {
           const data = JSON.parse(cached) as Library;
           setLibrary(data);
-          setSelectedTopicId(data.topics[0]?.id || "");
+          const routedTopic = topicBySlug(data.topics, route.topicSlug);
+          setMode(route.mode);
+          setSelectedTopicId(routedTopic?.id || data.topics[0]?.id || "");
         }
       });
   }, []);
@@ -104,27 +121,68 @@ function App() {
   const activeCard = reviewCards.find((card) => card.id === activeCardId) || reviewCards[0];
 
   useEffect(() => {
+    if (!library) return;
+    const routedTopic = topicBySlug(library.topics, route.topicSlug);
+    setMode(route.mode);
+    if (route.mode === "review" && !route.topicSlug) {
+      setSelectedTopicId((current) => (current === "all" ? current : "all"));
+      return;
+    }
+    if (routedTopic) {
+      setSelectedTopicId((current) => (current === routedTopic.id ? current : routedTopic.id));
+    } else {
+      setSelectedTopicId((current) => current || library.topics[0]?.id || "");
+    }
+  }, [library, route]);
+
+  useEffect(() => {
     setActiveCardId("");
     setAnswerVisible(false);
   }, [selectedTopicId]);
 
   function changeMode(nextMode: Mode) {
-    setMode(nextMode);
-    if (nextMode === "book" && selectedTopicId === "all") {
-      setSelectedTopicId(library?.topics[0]?.id || "");
-    }
+    const topic = selectedTopicId === "all" ? library?.topics[0] : selectedTopic;
+    navigate(nextMode, nextMode === "review" && selectedTopicId === "all" ? undefined : topic);
   }
 
   function changeTopic(topicID: string) {
-    setSelectedTopicId(topicID);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (topicID === "all") {
+      navigate("review");
+      return;
+    }
+    const topic = library?.topics.find((item) => item.id === topicID);
+    navigate(mode, topic);
   }
 
   function openTopicByTitle(title: string) {
     const topic = topicLookup.get(normalizeTitle(title));
     if (!topic) return;
-    setMode("book");
-    changeTopic(topic.id);
+    navigate("book", topic);
+  }
+
+  function navigate(nextMode: Mode, topic?: Topic, section?: Section, replace = false) {
+    const nextHash = routeHash(nextMode, topic, section);
+    if (window.location.hash === nextHash) {
+      setMode(nextMode);
+      setSelectedTopicId(topic?.id || (nextMode === "review" ? "all" : library?.topics[0]?.id || ""));
+      setReadSectionSlug(section ? slugify(section.title) : undefined);
+      scrollToSection(section);
+      return;
+    }
+    if (replace) {
+      window.history.replaceState(null, "", nextHash);
+      setRoute(parseRoute(nextHash));
+    } else {
+      window.location.hash = nextHash;
+    }
+  }
+
+  function markReadSection(topic: Topic, section: Section) {
+    const nextHash = routeHash("book", topic, section);
+    if (window.location.hash !== nextHash) {
+      window.history.replaceState(null, "", nextHash);
+    }
+    setReadSectionSlug(slugify(section.title));
   }
 
   function gradeCard(card: Card, ease: number, days: number) {
@@ -211,7 +269,17 @@ function App() {
       </aside>
 
       <section className="workspace">
-        {mode === "book" && selectedTopic && <BookView topic={selectedTopic} onOpenTopic={openTopicByTitle} />}
+        {mode === "book" && selectedTopic && (
+          <BookView
+            key={selectedTopic.id}
+            topic={selectedTopic}
+            activeSectionSlug={readSectionSlug || route.sectionSlug}
+            scrollSectionSlug={route.sectionSlug}
+            onOpenTopic={openTopicByTitle}
+            onOpenSection={(section) => navigate("book", selectedTopic, section)}
+            onReadSection={(section) => markReadSection(selectedTopic, section)}
+          />
+        )}
         {mode === "review" && (
           <ReviewView
             card={activeCard}
@@ -262,13 +330,61 @@ function TopicList({
   );
 }
 
-function BookView({ topic, onOpenTopic }: { topic: Topic; onOpenTopic: (title: string) => void }) {
+function BookView({
+  topic,
+  activeSectionSlug,
+  scrollSectionSlug,
+  onOpenTopic,
+  onOpenSection,
+  onReadSection
+}: {
+  topic: Topic;
+  activeSectionSlug?: string;
+  scrollSectionSlug?: string;
+  onOpenTopic: (title: string) => void;
+  onOpenSection: (section: Section) => void;
+  onReadSection: (section: Section) => void;
+}) {
+  const contentRef = useRef<HTMLDivElement | null>(null);
+
   function handleMarkdownClick(event: React.MouseEvent<HTMLElement>) {
     const target = event.target as HTMLElement;
     const wikiLink = target.closest<HTMLElement>("[data-topic-title]");
     if (!wikiLink) return;
     onOpenTopic(wikiLink.dataset.topicTitle || "");
   }
+
+  useEffect(() => {
+    const section = sectionBySlug(topic, scrollSectionSlug);
+    if (section) {
+      window.requestAnimationFrame(() => scrollToSection(section));
+    } else {
+      window.scrollTo({ top: 0, behavior: "auto" });
+    }
+  }, [scrollSectionSlug, topic]);
+
+  useEffect(() => {
+    if (!contentRef.current || topic.sections.length <= 1) return undefined;
+    const observed = new Map<Element, Section>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => Math.abs(a.boundingClientRect.top) - Math.abs(b.boundingClientRect.top))[0];
+        const section = visible ? observed.get(visible.target) : undefined;
+        if (section) onReadSection(section);
+      },
+      { rootMargin: "-20% 0px -65% 0px", threshold: [0, 0.1, 0.3] }
+    );
+
+    for (const section of topic.sections) {
+      const element = document.getElementById(section.id);
+      if (!element) continue;
+      observed.set(element, section);
+      observer.observe(element);
+    }
+    return () => observer.disconnect();
+  }, [onReadSection, topic]);
 
   return (
     <article className="book-view" onClick={handleMarkdownClick}>
@@ -282,16 +398,22 @@ function BookView({ topic, onOpenTopic }: { topic: Topic; onOpenTopic: (title: s
         {topic.sections.length > 1 ? (
           <nav className="toc" aria-label="Содержание главы">
             {topic.sections.map((section) => (
-              <a key={`${topic.id}-${section.id}`} href={`#${section.id}`} style={{ paddingLeft: `${Math.max(section.level - 1, 0) * 10}px` }}>
+              <button
+                key={`${topic.id}-${section.id}`}
+                className={slugify(section.title) === activeSectionSlug ? "active" : ""}
+                onClick={() => onOpenSection(section)}
+                style={{ paddingLeft: `${Math.max(section.level - 1, 0) * 10}px` }}
+                type="button"
+              >
                 {section.title}
-              </a>
+              </button>
             ))}
           </nav>
         ) : (
           <></>
         )}
 
-        <div className="markdown-body">
+        <div className="markdown-body" ref={contentRef}>
           {topic.sections.length === 0 ? (
             <MarkdownBlock markdown={topic.content} />
           ) : (
@@ -430,11 +552,12 @@ function MarkdownBlock({ markdown }: { markdown: string }) {
 type MarkdownNode =
   | { type: "paragraph"; lines: string[] }
   | { type: "blockquote"; lines: string[] }
+  | { type: "table"; headers: string[]; rows: string[][]; align: Array<"left" | "center" | "right"> }
   | { type: "list"; ordered: boolean; items: { text: string; checked?: boolean }[] }
   | { type: "code"; language: string; code: string }
   | { type: "hr" };
 
-function parseMarkdown(markdown: string) {
+function parseMarkdown(markdown = "") {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   const nodes: MarkdownNode[] = [];
   let index = 0;
@@ -477,6 +600,19 @@ function parseMarkdown(markdown: string) {
       continue;
     }
 
+    if (isTableStart(lines, index)) {
+      const headers = splitTableRow(lines[index]);
+      const align = splitTableRow(lines[index + 1]).map(tableAlign);
+      const rows: string[][] = [];
+      index += 2;
+      while (index < lines.length && isTableRow(lines[index].trim())) {
+        rows.push(normalizeTableRow(splitTableRow(lines[index]), headers.length));
+        index++;
+      }
+      nodes.push({ type: "table", headers, rows, align });
+      continue;
+    }
+
     if (isListLine(line)) {
       const ordered = /^\d+\.\s+/.test(line);
       const items: { text: string; checked?: boolean }[] = [];
@@ -492,7 +628,7 @@ function parseMarkdown(markdown: string) {
     const paragraph: string[] = [];
     while (index < lines.length) {
       const next = lines[index].trim();
-      if (!next || next.startsWith(">") || next.startsWith("```") || /^---+$/.test(next) || isListLine(next)) break;
+      if (!next || next.startsWith(">") || next.startsWith("```") || /^---+$/.test(next) || isListLine(next) || isTableStart(lines, index)) break;
       paragraph.push(lines[index].trim());
       index++;
     }
@@ -514,6 +650,34 @@ function renderMarkdownNode(node: MarkdownNode, index: number) {
   }
   if (node.type === "blockquote") {
     return <blockquote key={index} dangerouslySetInnerHTML={{ __html: inlineMarkdown(node.lines.join("\n")).replace(/\n/g, "<br />") }} />;
+  }
+  if (node.type === "table") {
+    return (
+      <div className="table-scroll" key={index}>
+        <table>
+          <thead>
+            <tr>
+              {node.headers.map((header, cellIndex) => (
+                <th key={`${header}-${cellIndex}`} style={{ textAlign: node.align[cellIndex] || "left" }}>
+                  <span dangerouslySetInnerHTML={{ __html: inlineMarkdown(header) }} />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {node.rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {node.headers.map((_header, cellIndex) => (
+                  <td key={cellIndex} style={{ textAlign: node.align[cellIndex] || "left" }}>
+                    <span dangerouslySetInnerHTML={{ __html: inlineMarkdown(row[cellIndex] || "") }} />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
   }
   if (node.type === "list") {
     const Tag = node.ordered ? "ol" : "ul";
@@ -544,7 +708,43 @@ function parseListLine(value: string) {
   return { text: cleaned };
 }
 
-function inlineMarkdown(value: string) {
+function isTableStart(lines: string[], index: number) {
+  const current = lines[index]?.trim() || "";
+  const next = lines[index + 1]?.trim() || "";
+  return isTableRow(current) && isTableSeparator(next) && splitTableRow(current).length >= 2;
+}
+
+function isTableRow(value: string) {
+  return value.startsWith("|") && value.endsWith("|") && value.split("|").length >= 3;
+}
+
+function isTableSeparator(value: string) {
+  if (!isTableRow(value)) return false;
+  return splitTableRow(value).every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function splitTableRow(value: string) {
+  return value
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function normalizeTableRow(cells: string[], length: number) {
+  if (cells.length >= length) return cells.slice(0, length);
+  return [...cells, ...Array.from({ length: length - cells.length }, () => "")];
+}
+
+function tableAlign(value: string): "left" | "center" | "right" {
+  const trimmed = value.trim();
+  if (trimmed.startsWith(":") && trimmed.endsWith(":")) return "center";
+  if (trimmed.endsWith(":")) return "right";
+  return "left";
+}
+
+function inlineMarkdown(value = "") {
   return escapeHTML(value)
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/`([^`]+)`/g, "<code>$1</code>")
@@ -611,7 +811,7 @@ function isDue(card: Card, state: ReviewState) {
   return !item || new Date(item.due).getTime() <= Date.now();
 }
 
-function escapeHTML(value: string) {
+function escapeHTML(value = "") {
   return value
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -630,6 +830,45 @@ function buildTopicLookup(topics: Topic[]) {
     lookup.set(normalizeTitle(topic.path.replace(/\.md$/i, "")), topic);
   }
   return lookup;
+}
+
+function parseRoute(hash: string): Route {
+  const cleanHash = hash.replace(/^#\/?/, "");
+  if (!cleanHash) return { mode: "book" };
+  const [modePart, topicSlug, sectionSlug] = cleanHash.split("/").map((part) => decodeURIComponent(part || ""));
+  if (modePart === "review") return { mode: "review", topicSlug };
+  if (modePart === "book") return { mode: "book", topicSlug, sectionSlug };
+  return { mode: "book" };
+}
+
+function routeHash(mode: Mode, topic?: Topic, section?: Section) {
+  const parts: string[] = [mode];
+  if (topic) parts.push(slugify(topic.title));
+  if (topic && section) parts.push(slugify(section.title));
+  return `#/${parts.map(encodeURIComponent).join("/")}`;
+}
+
+function topicBySlug(topics: Topic[], topicSlug?: string) {
+  if (!topicSlug) return undefined;
+  return topics.find((topic) => slugify(topic.title) === topicSlug || slugify(topic.path.replace(/\.md$/i, "")) === topicSlug);
+}
+
+function sectionBySlug(topic: Topic, sectionSlug?: string) {
+  if (!sectionSlug) return undefined;
+  return topic.sections.find((section) => slugify(section.title) === sectionSlug);
+}
+
+function slugify(value: string) {
+  return normalizeTitle(value)
+    .replace(/\.md$/i, "")
+    .replace(/[^a-zа-яё0-9]+/gi, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function scrollToSection(section?: Section) {
+  if (!section) return;
+  const element = document.getElementById(section.id);
+  element?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function normalizeTitle(value: string) {
@@ -688,4 +927,36 @@ function useMediaQuery(query: string) {
   return matches;
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+class AppErrorBoundary extends Component<{ children: React.ReactNode }, { error?: Error }> {
+  state: { error?: Error } = {};
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <main className="error-screen">
+          <h1>Не удалось отрисовать страницу</h1>
+          <p>Скорее всего, попался неожиданный markdown или устаревший якорь в адресе. Можно вернуться к началу книги.</p>
+          <button
+            onClick={() => {
+              window.location.hash = "#/book";
+              window.location.reload();
+            }}
+          >
+            Открыть книгу
+          </button>
+        </main>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+createRoot(document.getElementById("root")!).render(
+  <AppErrorBoundary>
+    <App />
+  </AppErrorBoundary>
+);

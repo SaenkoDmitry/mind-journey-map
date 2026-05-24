@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -106,6 +107,7 @@ func parseSections(markdown string) []Section {
 	var sections []Section
 	var current *Section
 	var body []string
+	headingCounts := map[string]int{}
 
 	flush := func() {
 		if current == nil {
@@ -120,8 +122,14 @@ func parseSections(markdown string) []Section {
 		level, title, ok := heading(line)
 		if ok {
 			flush()
+			baseID := stableID(title)
+			headingCounts[baseID]++
+			id := baseID
+			if headingCounts[baseID] > 1 {
+				id = baseID + "-" + stableID(title+strconv.Itoa(headingCounts[baseID]))
+			}
 			current = &Section{
-				ID:    stableID(title),
+				ID:    id,
 				Title: title,
 				Level: level,
 			}
