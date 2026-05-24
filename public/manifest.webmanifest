@@ -1,0 +1,17 @@
+{
+  "name": "Mind Journey",
+  "short_name": "Journey",
+  "description": "System design knowledge base with book and spaced repetition modes.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f4ee",
+  "theme_color": "#111827",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
+
