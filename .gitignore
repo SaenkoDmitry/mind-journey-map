@@ -1,7 +1,6 @@
 node_modules/
 .gocache/
-server
-mind-journey-app
+mind-journey-map
 *.log
 cmd/server/dist/assets/
 cmd/server/dist/index.html
