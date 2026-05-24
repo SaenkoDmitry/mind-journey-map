@@ -51,3 +51,4 @@ jobs:
             cd /opt/mind-journey-map
             sudo systemctl start mind-journey-map
             sudo systemctl status mind-journey-map --no-pager
+
